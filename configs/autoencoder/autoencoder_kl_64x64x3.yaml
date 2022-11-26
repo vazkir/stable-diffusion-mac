@@ -5,6 +5,7 @@ model:
     monitor: "val/rec_loss"
     embed_dim: 3
     lossconfig:
+      # Basically a perceptual loss
       target: ldm.modules.losses.LPIPSWithDiscriminator
       params:
         disc_start: 50001
@@ -24,6 +25,7 @@ model:
       dropout: 0.0
 
 
+# Dataloader instructions
 data:
   target: main.DataModuleFromConfig
   params:
@@ -40,6 +42,7 @@ data:
         size: 256
         degradation: pil_nearest
 
+# Callbacks for pytorch lighting that is used
 lightning:
   callbacks:
     image_logger:

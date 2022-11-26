@@ -2,12 +2,18 @@
 .env
 unused_code
 local_certs
+logs
+
+# Local settings
+.vscode
 
 # Path to store images to train
 {XDG_CACHE}
+.cache
 
 # Where local repos are installed
 src
 
 # egg file create from setup.py 
 latent_diffusion.egg-info
+taming

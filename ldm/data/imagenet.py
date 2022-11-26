@@ -162,7 +162,7 @@ class ImageNetTrain(ImageNetBase):
         if not tdu.is_prepared(self.root):
             # prep
             print("Preparing dataset {} in {}".format(self.NAME, self.root))
-
+            print("datadir -> ", self.datadir)
             datadir = self.datadir
             if not os.path.exists(datadir):
                 path = os.path.join(self.root, self.FILES[0])

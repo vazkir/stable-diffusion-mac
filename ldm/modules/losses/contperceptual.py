@@ -12,18 +12,30 @@ class LPIPSWithDiscriminator(nn.Module):
 
         super().__init__()
         assert disc_loss in ["hinge", "vanilla"]
+        
+        # Loss coefficients, so determine on which component of the loss we are looking
+        # at will have a different to be used
         self.kl_weight = kl_weight
         self.pixel_weight = pixelloss_weight
+        
+        # The perceptual loss, idea came from NST
         self.perceptual_loss = LPIPS().eval()
         self.perceptual_weight = perceptual_weight
         # output log variance
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init)
 
+        # This discriminator will be used for the adverserial loss component of LPIPS
+        # Just a normal discriminator, which also downsamples because its patchGAN based from pix2pix
+        # Main difference: Instead of having a scalar telling you it's real or fake we now have:
+        # - For a Patch will maybe have 32x32 scalars, and all of them will just tell you if 
+        # - That specific path is real or fake, gives you more information for our model to train
         self.discriminator = NLayerDiscriminator(input_nc=disc_in_channels,
                                                  n_layers=disc_num_layers,
                                                  use_actnorm=use_actnorm
                                                  ).apply(weights_init)
         self.discriminator_iter_start = disc_start
+        
+        # Here we have some hinge loss
         self.disc_loss = hinge_d_loss if disc_loss == "hinge" else vanilla_d_loss
         self.disc_factor = disc_factor
         self.discriminator_weight = disc_weight

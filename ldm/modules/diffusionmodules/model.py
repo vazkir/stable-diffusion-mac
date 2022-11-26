@@ -365,6 +365,7 @@ class Model(nn.Module):
         return self.conv_out.weight
 
 
+# Latent space encoder that also applies self attention
 class Encoder(nn.Module):
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
@@ -402,11 +403,18 @@ class Encoder(nn.Module):
                                          dropout=dropout))
                 block_in = block_out
                 if curr_res in attn_resolutions:
+                    
+                    # Takes the image features in this latent space of the encoder
+                    # And do the VAT type of self attention
+                    # Kind of unroll them and do self attention logic
+                    # Where every token attends to every other token
                     attn.append(make_attn(block_in, attn_type=attn_type))
             down = nn.Module()
             down.block = block
             down.attn = attn
             if i_level != self.num_resolutions-1:
+                
+                # Basically a conv layer with a stride of 2 and padding 0
                 down.downsample = Downsample(block_in, resamp_with_conv)
                 curr_res = curr_res // 2
             self.down.append(down)
@@ -458,7 +466,7 @@ class Encoder(nn.Module):
         h = self.conv_out(h)
         return h
 
-
+# Laten space decoder 
 class Decoder(nn.Module):
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,

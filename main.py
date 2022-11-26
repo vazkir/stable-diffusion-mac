@@ -296,9 +296,10 @@ class ImageLogger(Callback):
         self.rescale = rescale
         self.batch_freq = batch_frequency
         self.max_images = max_images
-        self.logger_log_images = {
-            pl.loggers.TestTubeLogger: self._testtube,
-        }
+        # self.logger_log_images = {
+        #     pl.loggers.TestTubeLogger: self._testtube,
+        # }
+        self.logger_log_images = {}
         self.log_steps = [2 ** n for n in range(int(np.log2(self.batch_freq)) + 1)]
         if not increase_log_steps:
             self.log_steps = [self.batch_freq]
@@ -308,16 +309,19 @@ class ImageLogger(Callback):
         self.log_images_kwargs = log_images_kwargs if log_images_kwargs else {}
         self.log_first_step = log_first_step
 
-    @rank_zero_only
-    def _testtube(self, pl_module, images, batch_idx, split):
-        for k in images:
-            grid = torchvision.utils.make_grid(images[k])
-            grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
-
-            tag = f"{split}/{k}"
-            pl_module.logger.experiment.add_image(
-                tag, grid,
-                global_step=pl_module.global_step)
+    # Removed in torch 1.7, which introduced mps support, see these:
+    # - https://github.com/invoke-ai/InvokeAI/blob/main/main.py
+    # - https://github.com/Lightning-AI/lightning/issues/13958
+#     @rank_zero_only
+#     def _testtube(self, pl_module, images, batch_idx, split):
+#         for k in images:
+#             grid = torchvision.utils.make_grid(images[k])
+#             grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+# 
+#             tag = f"{split}/{k}"
+#             pl_module.logger.experiment.add_image(
+#                 tag, grid,
+#                 global_step=pl_module.global_step)
 
     @rank_zero_only
     def log_local(self, save_dir, split, images,
@@ -398,21 +402,26 @@ class CUDACallback(Callback):
     # see https://github.com/SeanNaren/minGPT/blob/master/mingpt/callback.py
     def on_train_epoch_start(self, trainer, pl_module):
         # Reset the memory use counter
-        torch.cuda.reset_peak_memory_stats(trainer.root_gpu)
-        torch.cuda.synchronize(trainer.root_gpu)
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(trainer.root_gpu)
+            torch.cuda.synchronize(trainer.root_gpu)
         self.start_time = time.time()
 
     def on_train_epoch_end(self, trainer, pl_module, outputs):
-        torch.cuda.synchronize(trainer.root_gpu)
-        max_memory = torch.cuda.max_memory_allocated(trainer.root_gpu) / 2 ** 20
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(trainer.root_gpu)
         epoch_time = time.time() - self.start_time
 
         try:
-            max_memory = trainer.training_type_plugin.reduce(max_memory)
             epoch_time = trainer.training_type_plugin.reduce(epoch_time)
+            rank_zero_info(f'Average Epoch time: {epoch_time:.2f} seconds')
 
-            rank_zero_info(f"Average Epoch time: {epoch_time:.2f} seconds")
-            rank_zero_info(f"Average Peak memory {max_memory:.2f}MiB")
+            if torch.cuda.is_available():
+                max_memory = (
+                    torch.cuda.max_memory_allocated(trainer.root_gpu) / 2**20
+                )
+                max_memory = trainer.training_type_plugin.reduce(max_memory)
+                rank_zero_info(f'Average Peak memory {max_memory:.2f}MiB')
         except AttributeError:
             pass
 
@@ -513,15 +522,17 @@ if __name__ == "__main__":
 
     try:
         # init and save configs
+        # This loads the specify config yaml file with the instructions needed
         configs = [OmegaConf.load(cfg) for cfg in opt.base]
         cli = OmegaConf.from_dotlist(unknown)
         config = OmegaConf.merge(*configs, cli)
         lightning_config = config.pop("lightning", OmegaConf.create())
         # merge trainer cli with config
         trainer_config = lightning_config.get("trainer", OmegaConf.create())
+
         # default to ddp
         # Distribyte data parralele from pytorch, but only work with 1 gpu
-        # trainer_config["accelerator"] = "ddp"
+        trainer_config["accelerator"] = "auto"
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
         if not "gpus" in trainer_config:
@@ -534,32 +545,37 @@ if __name__ == "__main__":
         trainer_opt = argparse.Namespace(**trainer_config)
         lightning_config.trainer = trainer_config
 
-        # model
+        print(trainer_config)
+
+        # For example the AutoEncoder for the latent space
         model = instantiate_from_config(config.model)
 
         # trainer and callbacks
         trainer_kwargs = dict()
 
         # default logger configs
+        def_logger = 'csv'
+        def_logger_target = 'CSVLogger'
         default_logger_cfgs = {
-            "wandb": {
-                "target": "pytorch_lightning.loggers.WandbLogger",
-                "params": {
-                    "name": nowname,
-                    "save_dir": logdir,
-                    "offline": opt.debug,
-                    "id": nowname,
-                }
+            'wandb': {
+                'target': 'pytorch_lightning.loggers.WandbLogger',
+                'params': {
+                    'name': nowname,
+                    'save_dir': logdir,
+                    'offline': opt.debug,
+                    'id': nowname,
+                },
             },
-            "testtube": {
-                "target": "pytorch_lightning.loggers.TestTubeLogger",
-                "params": {
-                    "name": "testtube",
-                    "save_dir": logdir,
-                }
+            def_logger: {
+                'target': 'pytorch_lightning.loggers.' + def_logger_target,
+                'params': {
+                    'name': def_logger,
+                    'save_dir': logdir,
+                },
             },
         }
-        default_logger_cfg = default_logger_cfgs["testtube"]
+        default_logger_cfg = default_logger_cfgs[def_logger]
+        
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
@@ -658,6 +674,13 @@ if __name__ == "__main__":
             del callbacks_cfg['ignore_keys_callback']
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
+        
+        # From: https://github.com/invoke-ai/InvokeAI/blob/main/main.py
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            trainer_opt.accelerator = 'mps'
+            trainer_opt.detect_anomaly = False
+            
+        print(trainer_kwargs, trainer_opt)
 
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
@@ -719,13 +742,15 @@ if __name__ == "__main__":
         # run
         if opt.train:
             try:
+                # This is where the magic starts
                 trainer.fit(model, data)
             except Exception:
                 melk()
                 raise
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)
-    except Exception:
+    except Exception as e:
+        print("EXCPETION -> ", e)
         if opt.debug and trainer.global_rank == 0:
             try:
                 import pudb as debugger
