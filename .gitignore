@@ -8,3 +8,6 @@ local_certs
 
 # Where local repos are installed
 src
+
+# egg file create from setup.py 
+latent_diffusion.egg-info
