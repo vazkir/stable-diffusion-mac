@@ -201,7 +201,9 @@ class DataModuleFromConfig(pl.LightningDataModule):
         else:
             init_fn = None
         return DataLoader(self.datasets["train"], batch_size=self.batch_size,
-                          num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
+                        #   num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
+                        # shuffle false because small dataset, and original index might mismatch
+                          num_workers=self.num_workers, shuffle=False,
                           worker_init_fn=init_fn)
 
     def _val_dataloader(self, shuffle=False):
@@ -518,7 +520,8 @@ if __name__ == "__main__":
         # merge trainer cli with config
         trainer_config = lightning_config.get("trainer", OmegaConf.create())
         # default to ddp
-        trainer_config["accelerator"] = "ddp"
+        # Distribyte data parralele from pytorch, but only work with 1 gpu
+        # trainer_config["accelerator"] = "ddp"
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
         if not "gpus" in trainer_config:
