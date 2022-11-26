@@ -3,6 +3,8 @@
 unused_code
 local_certs
 logs
+__pycache__
+
 
 # Local settings
 .vscode
