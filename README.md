@@ -1,4 +1,11 @@
 # Stable Diffusion
+
+Changes in this fork:
+- Forked with from [commit 21f890f]()https://github.com/CompVis/stable-diffusion/commit/21f890f9da3cfbeaba8e2ac3c425ee9e998d5229
+- Most changes came from [this thread](https://github.com/CompVis/stable-diffusion/issues/25)
+
+
+
 *Stable Diffusion was made possible thanks to a collaboration with [Stability AI](https://stability.ai/) and [Runway](https://runwayml.com/) and builds upon our previous work:*
 
 [**High-Resolution Image Synthesis with Latent Diffusion Models**](https://ommer-lab.com/research/latent-diffusion-models/)<br/>
