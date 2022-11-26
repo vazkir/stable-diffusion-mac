@@ -19,6 +19,14 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 
+def get_device():
+    if(torch.cuda.is_available()):
+        return torch.device("cuda")
+    elif(torch.backends.mps.is_available()):
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
+    
 
 def chunk(it, size):
     it = iter(it)
@@ -40,7 +48,7 @@ def load_model_from_config(config, ckpt, verbose=False):
         print("unexpected keys:")
         print(u)
 
-    model.cuda()
+    model.to(get_device())
     model.eval()
     return model
 
@@ -199,9 +207,10 @@ def main():
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
 
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    # Create instance, because need it later again
+    device = get_device()
     model = model.to(device)
-
+    
     if opt.plms:
         raise NotImplementedError("PLMS sampler not (yet) supported")
         sampler = PLMSSampler(model)
@@ -242,7 +251,7 @@ def main():
 
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
     with torch.no_grad():
-        with precision_scope("cuda"):
+        with precision_scope(device.type):
             with model.ema_scope():
                 tic = time.time()
                 all_samples = list()
@@ -256,7 +265,17 @@ def main():
                         c = model.get_learned_conditioning(prompts)
 
                         # encode (scaled latent)
-                        z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]*batch_size).to(device))
+                        # z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]*batch_size).to(device))
+                        
+                        # Makes results reproducable for macs, see this: https://github.com/CompVis/stable-diffusion/issues/25#issuecomment-1229901662
+                        z_enc = sampler.stochastic_encode(
+                            init_latent,
+                            torch.tensor([t_enc] * batch_size).to(device),
+                            noise=torch.randn_like(init_latent, device="cpu").to(device)
+                            if opt.fixed_code
+                            else None,
+                        )
+                        
                         # decode it
                         samples = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=opt.scale,
                                                  unconditional_conditioning=uc,)

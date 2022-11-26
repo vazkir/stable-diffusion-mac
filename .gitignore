@@ -1,0 +1,10 @@
+.DS_Store
+.env
+unused_code
+local_certs
+
+# Path to store images to train
+{XDG_CACHE}
+
+# Where local repos are installed
+src

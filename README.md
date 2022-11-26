@@ -2,9 +2,15 @@
 
 Changes in this fork:
 - Forked with from [commit 21f890f]()https://github.com/CompVis/stable-diffusion/commit/21f890f9da3cfbeaba8e2ac3c425ee9e998d5229
-- Most changes came from [this thread](https://github.com/CompVis/stable-diffusion/issues/25)
-
-
+- Most changes came from these threads:
+  - [this thread](https://github.com/CompVis/stable-diffusion/issues/25)
+  - [this thread](https://github.com/CompVis/stable-diffusion/issues/25)
+  - And also from [this PR on invokeai](https://github.com/invoke-ai/InvokeAI/pull/179/files)
+- Issue with rust requirement for tokenizers
+  - [Could not build wheels for tokenizers in Python](https://bobbyhadz.com/blog/python-error-could-not-build-wheels-for-tokenizers)
+  - [Thread with another solution](https://github.com/huggingface/tokenizers/issues/1050#issuecomment-1252313016)
+- Issues with gpcrcio
+  - [SO Solution](https://stackoverflow.com/questions/66640705/how-can-i-install-grpcio-on-an-apple-m1-silicon-laptop)
 
 *Stable Diffusion was made possible thanks to a collaboration with [Stability AI](https://stability.ai/) and [Runway](https://runwayml.com/) and builds upon our previous work:*
 
