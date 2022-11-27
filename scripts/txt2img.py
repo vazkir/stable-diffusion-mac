@@ -5,7 +5,7 @@ import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
 from tqdm import tqdm, trange
-from imwatermark import WatermarkEncoder
+# from imwatermark import WatermarkEncoder
 from itertools import islice
 from einops import rearrange
 from torchvision.utils import make_grid
@@ -131,6 +131,7 @@ def main():
         action='store_true',
         help="do not save individual samples. For speed measurements.",
     )
+    # How many diffusion steps that are going to be taken
     parser.add_argument(
         "--ddim_steps",
         type=int,
@@ -152,6 +153,9 @@ def main():
         action='store_true',
         help="uses the LAION400M model",
     )
+    
+    # This is if you always want to start at the same latent which is going to
+    # constraint your ouputs to be less diverse
     parser.add_argument(
         "--fixed_code",
         action='store_true',
@@ -163,12 +167,16 @@ def main():
         default=0.0,
         help="ddim eta (eta=0.0 corresponds to deterministic sampling",
     )
+    
+    # How many images we are generating, as each iteration we generate 1 image
     parser.add_argument(
         "--n_iter",
         type=int,
         default=2,
         help="sample this often",
     )
+    
+    # The input image dimension
     parser.add_argument(
         "--H",
         type=int,
@@ -181,6 +189,8 @@ def main():
         default=512,
         help="image width, in pixel space",
     )
+    
+    # The latent dimensions
     parser.add_argument(
         "--C",
         type=int,
@@ -268,10 +278,10 @@ def main():
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
 
-    print("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
-    wm = "StableDiffusionV1"
-    wm_encoder = WatermarkEncoder()
-    wm_encoder.set_watermark('bytes', wm.encode('utf-8'))
+    # print("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
+    # wm = "StableDiffusionV1"
+    # wm_encoder = WatermarkEncoder()
+    # wm_encoder.set_watermark('bytes', wm.encode('utf-8'))
 
     batch_size = opt.n_samples
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
@@ -338,7 +348,7 @@ def main():
                             for x_sample in x_checked_image_torch:
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                 img = Image.fromarray(x_sample.astype(np.uint8))
-                                img = put_watermark(img, wm_encoder)
+                                # img = put_watermark(img, wm_encoder)
                                 img.save(os.path.join(sample_path, f"{base_count:05}.png"))
                                 base_count += 1
 
@@ -354,7 +364,7 @@ def main():
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     img = Image.fromarray(grid.astype(np.uint8))
-                    img = put_watermark(img, wm_encoder)
+                    # img = put_watermark(img, wm_encoder)
                     img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
                     grid_count += 1
 
