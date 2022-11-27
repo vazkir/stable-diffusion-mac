@@ -22,3 +22,6 @@ taming
 
 # Where the downloaded weights are stored
 models/*/**
+
+# Where the outputs are store
+outputs/*
