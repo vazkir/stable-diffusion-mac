@@ -433,6 +433,8 @@ class Encoder(nn.Module):
 
         # end
         self.norm_out = Normalize(block_in)
+        
+        # Finally put it into a latent space representation the U-NET can then use
         self.conv_out = torch.nn.Conv2d(block_in,
                                         2*z_channels if double_z else z_channels,
                                         kernel_size=3,
@@ -445,6 +447,8 @@ class Encoder(nn.Module):
 
         # downsampling
         hs = [self.conv_in(x)]
+        
+        # Basically downsample with resnet blocks
         for i_level in range(self.num_resolutions):
             for i_block in range(self.num_res_blocks):
                 h = self.down[i_level].block[i_block](hs[-1], temb)
@@ -463,6 +467,11 @@ class Encoder(nn.Module):
         # end
         h = self.norm_out(h)
         h = nonlinearity(h)
+        
+        # Get to latent space representation of dime (1,6,64,64)
+        # - 64 is pre-defined as to what the latent net should work with from the config used
+        # - 6 because we are returning the mean and std dev here, and we sample before passed to decode
+        # NOTE: They also try different types of AEs, like KL Regularized or Quantized versions
         h = self.conv_out(h)
         return h
 
@@ -512,6 +521,8 @@ class Decoder(nn.Module):
 
         # upsampling
         self.up = nn.ModuleList()
+        
+        # Basically reversing the downsampleing with resnet blocks again
         for i_level in reversed(range(self.num_resolutions)):
             block = nn.ModuleList()
             attn = nn.ModuleList()
@@ -534,6 +545,8 @@ class Decoder(nn.Module):
 
         # end
         self.norm_out = Normalize(block_in)
+        
+        # Should end with the same shape as the input img so (1, 3, 256, 256)
         self.conv_out = torch.nn.Conv2d(block_in,
                                         out_ch,
                                         kernel_size=3,

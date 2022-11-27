@@ -21,17 +21,32 @@ class DiracDistribution(AbstractDistribution):
         return self.value
 
 
+# This is used for the output from the AE, which contains means and variances
+# Basically just returns a gaussian, created from parsing output of the AE
 class DiagonalGaussianDistribution(object):
+    
+    # Parses the output of the AE and sets all class variables, so methods can be used
     def __init__(self, parameters, deterministic=False):
         self.parameters = parameters
+        
+        # torch.chunk -> Attempts to split a tensor into the specified number of chunks
+        # mean shape: (1, 3, 64, 64) and logvar shape (1, 3, 64, 64)
+        # So it creates 2 chunks split in the first dimensions, which is 6
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
+        
+        # Clamps all elements in input into the range [ min, max ]
+        # Any number outside this is converted to -30.0 or 20.0
         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
         self.deterministic = deterministic
+        
+        # From the logisic variance, we want to return to actual std and var
         self.std = torch.exp(0.5 * self.logvar)
         self.var = torch.exp(self.logvar)
         if self.deterministic:
             self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
 
+    # To sample we take the mean + (stdev * normal noise from the gaussian)
+    # e.g. mean.shape -> (1, 3, 64, 64)
     def sample(self):
         x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
         return x

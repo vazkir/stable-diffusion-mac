@@ -226,7 +226,8 @@ class DataModuleFromConfig(pl.LightningDataModule):
                         # shuffle false because small dataset, and original index might mismatch
                           num_workers=self.num_workers, shuffle=False,
                           worker_init_fn=init_fn)
-
+        
+    # Pytorch Lighting -> This is loaded first to double check if validation metrics work
     def _val_dataloader(self, shuffle=False):
         if isinstance(self.datasets['validation'], Txt2ImgIterableBaseDataset) or self.use_worker_init_fn:
             init_fn = worker_init_fn
@@ -277,6 +278,7 @@ class SetupCallback(Callback):
             ckpt_path = os.path.join(self.ckptdir, "last.ckpt")
             trainer.save_checkpoint(ckpt_path)
 
+    # Creating some directories for things like logging and checkpoints
     def on_pretrain_routine_start(self, trainer, pl_module):
         if trainer.global_rank == 0:
             # Create logdirs and save configs
@@ -568,7 +570,7 @@ if __name__ == "__main__":
 
         print(trainer_config)
 
-        # For example the AutoEncoder for the latent space
+        # For example the AutoEncoder to get the images into and out of latent space
         model = instantiate_from_config(config.model)
 
         # trainer and callbacks

@@ -304,7 +304,6 @@ class AutoencoderKL(pl.LightningModule):
         # Basically a perceptual loss combined with a adversial loss
         self.loss = instantiate_from_config(lossconfig)
         
-        
         assert ddconfig["double_z"]
         self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
@@ -331,44 +330,91 @@ class AutoencoderKL(pl.LightningModule):
         print(f"Restored from {path}")
 
     def encode(self, x):
+        
+        # Get to latent space representation of dime (1,6,64,64)
+        # - 64 is pre-defined as to what the latent net should work with from the config used
+        # - 6 because we are returning the mean and std dev here, and we sample before passed to decode
         h = self.encoder(x)
+        
+        # Moments they mean, the mean and the variances still -> (1,6,64,64)
         moments = self.quant_conv(h)
+        
+        # Basically form a distribution from these mean and variances derived from the input images
         posterior = DiagonalGaussianDistribution(moments)
+        
+        # This is an object on which we can now call methods like .sample or .kl
         return posterior
 
     def decode(self, z):
+        # Get the output from the unet into the right shapes
         z = self.post_quant_conv(z)
+        
+        # Does the upsampling with the attention and the resent blocks
+        # Should return the same size as the input image, like (1, 3, 256, 256)
         dec = self.decoder(z)
         return dec
 
     def forward(self, input, sample_posterior=True):
+        
+        # First lets encode our input
         posterior = self.encode(input)
+        
         if sample_posterior:
+            # This samples using the mean and posterion in shape (1, 3, 64, 64)
             z = posterior.sample()
         else:
+            # Returns the mean from the encoded input in shape (1, 3, 64, 64)
             z = posterior.mode()
+        
         dec = self.decode(z)
+        
+        # What we have returned is:
+        # - dec -> Reconstructed image in same shape
+        # - posterior -> DiagonalGaussianDistribution class to pull distributions for latent with
         return dec, posterior
 
     def get_input(self, batch, k):
+        
+        # Grabs the image from the batch
         x = batch[k]
+        
+        # If the input doesn't have batch but only dims and color channels -> (256,256,3) 
         if len(x.shape) == 3:
+            
+            # Then add the batch dimension, so that the model itself can work with this
             x = x[..., None]
+        
+        # Makes sure the memeory is contiguous (row oriented) in its format:
+        # - Because we can visit them efficiently in order without jumping around in the storage (CPUs)
+        # - Tensors are laid out in the storage starting from the rightmost dimension onward
+        # - Basically this 2d array can be assigned 1 spot in memory, meaning when data pulled from RAM;
+        # Into the cache memory, then if other data is needed after this, it already has it in cache
         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format).float()
         return x
 
+    # Pytorch lighting will call this twice with first optimise the generator and optimise distriminator
+    # NOTE: This is kind of suboptimal as we are calling this with the same input twice for each optimizer
     def training_step(self, batch, batch_idx, optimizer_idx):
+        
+        # batch comes from pytorch lighting
         inputs = self.get_input(batch, self.image_key)
+        
+        # This is a fancy way of saying call the forward method of this class
+        # Do remember that we are dealing with an auto encoder here
         reconstructions, posterior = self(inputs)
 
+        # Optimizer can be treated as a generator for encoder and decoder parts
         if optimizer_idx == 0:
             # train encoder+decoder+logvar
+            
+            # Important -> Kind of the brain of the AE training is going to happen
             aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, optimizer_idx, self.global_step,
                                             last_layer=self.get_last_layer(), split="train")
             self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             return aeloss
-
+        
+        # Optimize the discriminator weights, as its trainable
         if optimizer_idx == 1:
             # train the discriminator
             discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, optimizer_idx, self.global_step,
@@ -392,13 +438,18 @@ class AutoencoderKL(pl.LightningModule):
         self.log_dict(log_dict_disc)
         return self.log_dict
 
+
     def configure_optimizers(self):
         lr = self.learning_rate
+        
+        # Optimizer can be treated as a generator for encoder and decoder parts
         opt_ae = torch.optim.Adam(list(self.encoder.parameters())+
                                   list(self.decoder.parameters())+
                                   list(self.quant_conv.parameters())+
                                   list(self.post_quant_conv.parameters()),
                                   lr=lr, betas=(0.5, 0.9))
+        
+        # Optimize the discriminator weights, as its trainable
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
         return [opt_ae, opt_disc], []
