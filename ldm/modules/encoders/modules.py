@@ -150,6 +150,8 @@ class FrozenCLIPEmbedder(AbstractEncoder):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
     def __init__(self, version="openai/clip-vit-large-patch14", device=get_default_device_type(), max_length=77):
         super().__init__()
+        
+        # HF's pre-trained tokenizer and text model
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.device = device
@@ -162,11 +164,18 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             param.requires_grad = False
 
     def forward(self, text):
+        # We batch tokenize the input prompt
         batch_encoding = self.tokenizer(text, truncation=True, max_length=self.max_length, return_length=True,
                                         return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
+        
+        # For empty prompts with classifier free guidance, these will be the same number 2 numbers
+        # 1 times 49406 start of sentencte token and the rest are 4907 end of sentence tokens
         tokens = batch_encoding["input_ids"].to(self.device)
+        
+        # Pass them through its transformer, which the the textual part of the CLIP model
         outputs = self.transformer(input_ids=tokens)
 
+        # End up with a final representation of (1, 77, 768) from CLIP
         z = outputs.last_hidden_state
         return z
 

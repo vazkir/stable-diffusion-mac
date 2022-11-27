@@ -539,7 +539,10 @@ class LatentDiffusion(DDPM):
                 print(f"Training {self.__class__.__name__} as an unconditional model.")
                 self.cond_stage_model = None
                 # self.be_unconditional = True
+            # Used when doing inference
             else:
+                
+                # This would be the FrozenClipEmbedder for the inference stage
                 model = instantiate_from_config(config)
                 self.cond_stage_model = model.eval()
                 self.cond_stage_model.train = disabled_train
@@ -577,9 +580,13 @@ class LatentDiffusion(DDPM):
         # Scale factor is 1 in the first iteration checked
         return self.scale_factor * z
 
+    # Uses CLIP to generate a learned conditining
     def get_learned_conditioning(self, c):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
+                
+                # Here we encode the prompt, which is empty for classifier free guidance
+                # This is just a forward pass throught the FrozenClipEmbedder
                 c = self.cond_stage_model.encode(c)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()

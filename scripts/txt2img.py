@@ -23,10 +23,10 @@ from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionS
 from transformers import AutoFeatureExtractor
 
 
-# load safety model
-safety_model_id = "CompVis/stable-diffusion-safety-checker"
-safety_feature_extractor = AutoFeatureExtractor.from_pretrained(safety_model_id)
-safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_model_id)
+# # load safety model
+# safety_model_id = "CompVis/stable-diffusion-safety-checker"
+# safety_feature_extractor = AutoFeatureExtractor.from_pretrained(safety_model_id)
+# safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_model_id)
 
 
 def get_device():
@@ -85,6 +85,7 @@ def put_watermark(img, wm_encoder=None):
     return img
 
 
+# Load rick roll image to place when the generated image contains nsfw things
 def load_replacement(x):
     try:
         hwc = x.shape
@@ -96,10 +97,19 @@ def load_replacement(x):
         return x
 
 
+# safety_feature_extractor and safety_checker -> Pre-trained models from hugginface
+# AI Elephany had some issues where non nsfw things were corrected
+# If you look up the models used, then you cannot really see how its trained which makes sense
 def check_safety(x_image):
+        
+    # This extracts the input needed for the actual safety checker to run
     safety_checker_input = safety_feature_extractor(numpy_to_pil(x_image), return_tensors="pt")
+    
+    # Run the check on the image
     x_checked_image, has_nsfw_concept = safety_checker(images=x_image, clip_input=safety_checker_input.pixel_values)
     assert x_checked_image.shape[0] == len(has_nsfw_concept)
+    
+    # If there is any nsfw concept in the original image, put rick roll on it
     for i in range(len(has_nsfw_concept)):
         if has_nsfw_concept[i]:
             x_checked_image[i] = load_replacement(x_checked_image[i])
@@ -298,6 +308,7 @@ def main():
             data = f.read().splitlines()
             data = list(chunk(data, batch_size))
 
+    # Create some output directories to store the results
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
     base_count = len(os.listdir(sample_path))
@@ -314,22 +325,38 @@ def main():
             torch.randn(shape, device=device)
             
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
+    if device.type in ['mps', 'cpu']:
+        precision_scope = nullcontext # have to use f32 on mps
+        
     with torch.no_grad():
         
-        # NOTE: AI Elephany got error when het didn't put fp16 as another argument (default mixed)
+        # NOTE: AI Elephany got error (windows) when het didn't put fp16 as another argument (default mixed)
         with precision_scope(device.type):
             with model.ema_scope():
                 tic = time.time()
                 all_samples = list()
                 for n in trange(opt.n_iter, desc="Sampling"):
+                    
+                    # Visual indicator per prompt to show it's generating
                     for prompts in tqdm(data, desc="data"):
                         uc = None
                         if opt.scale != 1.0:
+                            
+                            # We get the learned_conditioning for the empty prompt
+                            # This is the classifier free guidance technique
+                            # Because opt.scale 0.75, we enter this part 
+                            # A learned representation of (1, 77, 768) from the frozen CLIP
+                            # uc: Unconditional Condition
                             uc = model.get_learned_conditioning(batch_size * [""])
+                            
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
+                        
+                        # Do the same CLIP encoding but with the prompt this time
                         c = model.get_learned_conditioning(prompts)
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                        
+                        # Now we can start sampling from the U-NET encoder
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
                                                          batch_size=opt.n_samples,
@@ -339,16 +366,17 @@ def main():
                                                          unconditional_conditioning=uc,
                                                          eta=opt.ddim_eta,
                                                          x_T=start_code)
-
+                        
+                        # Now we pass these encoded samples throught the decoder, attention upsample etc
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                        x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
+                        # x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
 
                         # For sake of speed removed the safety check on the output
                         # x_checked_image, has_nsfw_concept = check_safety(x_samples_ddim)
-                        x_checked_image = x_samples_ddim
                         
-                        x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+                        # x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+                        x_checked_image_torch = x_samples_ddim
 
                         if not opt.skip_save:
                             for x_sample in x_checked_image_torch:
@@ -361,6 +389,7 @@ def main():
                         if not opt.skip_grid:
                             all_samples.append(x_checked_image_torch)
 
+                # Arrange images into grids if you want to 
                 if not opt.skip_grid:
                     # additionally, save as grid
                     grid = torch.stack(all_samples, 0)
