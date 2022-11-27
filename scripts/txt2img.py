@@ -54,7 +54,9 @@ def numpy_to_pil(images):
 
     return pil_images
 
-
+# Better to use the diffusers library as they in some parts:
+# - accumulate in fp32 instead of everything in fp16
+# - As a consequence you can get lower quality imgages with model.half()
 def load_model_from_config(config, ckpt, verbose=False):
     print(f"Loading model from {ckpt}")
     pl_sd = torch.load(ckpt, map_location="cpu")
@@ -235,7 +237,7 @@ def main():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="models/ldm/stable-diffusion-v1/model.ckpt",
+        default="models/ldm/stable-diffusion-v1/v1-5-pruned-emaonly.ckpt",
         help="path to checkpoint of model",
     )
     parser.add_argument(
@@ -313,6 +315,8 @@ def main():
             
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
+        
+        # NOTE: AI Elephany got error when het didn't put fp16 as another argument (default mixed)
         with precision_scope(device.type):
             with model.ema_scope():
                 tic = time.time()
@@ -340,8 +344,10 @@ def main():
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
                         x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
 
-                        x_checked_image, has_nsfw_concept = check_safety(x_samples_ddim)
-
+                        # For sake of speed removed the safety check on the output
+                        # x_checked_image, has_nsfw_concept = check_safety(x_samples_ddim)
+                        x_checked_image = x_samples_ddim
+                        
                         x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
 
                         if not opt.skip_save:
