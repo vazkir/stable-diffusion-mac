@@ -20,6 +20,27 @@ from pytorch_lightning.utilities import rank_zero_info
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
 
+# From: https://github.com/invoke-ai/InvokeAI/blob/main/main.py
+# Sets the backend for all these functions used
+def fix_func(orig):
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        def new_func(*args, **kw):
+            device = kw.get("device", "mps")
+            kw["device"]="cpu"
+            return orig(*args, **kw).to(device)
+        return new_func
+    return orig
+
+torch.rand = fix_func(torch.rand)
+torch.rand_like = fix_func(torch.rand_like)
+torch.randn = fix_func(torch.randn)
+torch.randn_like = fix_func(torch.randn_like)
+torch.randint = fix_func(torch.randint)
+torch.randint_like = fix_func(torch.randint_like)
+torch.bernoulli = fix_func(torch.bernoulli)
+torch.multinomial = fix_func(torch.multinomial)
+
+
 
 def get_parser(**parser_kwargs):
     def str2bool(v):
@@ -678,7 +699,7 @@ if __name__ == "__main__":
         # From: https://github.com/invoke-ai/InvokeAI/blob/main/main.py
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             trainer_opt.accelerator = 'mps'
-            trainer_opt.detect_anomaly = False
+            trainer_opt.detect_anomaly = True
             
         print(trainer_kwargs, trainer_opt)
 

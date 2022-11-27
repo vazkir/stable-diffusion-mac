@@ -129,7 +129,10 @@ class DDIMSampler(object):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
-            img = torch.randn(shape, device=device)
+            # https://github.com/CompVis/stable-diffusion/issues/25#issuecomment-1229706811
+            # https://github.com/CompVis/stable-diffusion/issues/25#issuecomment-1230075917
+            # MPS random is not currently deterministic w.r.t seed, so compute randn() on-CPU
+            img = torch.randn(shape, device="cpu").to(device) if torch.device(device).type == 'mps' else torch.randn(shape, device=device)
         else:
             img = x_T
 

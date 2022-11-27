@@ -30,6 +30,7 @@ data:
   target: main.DataModuleFromConfig
   params:
     batch_size: 1
+    num_workers: 8 # To counter out of memoery erroe
     wrap: True
     train:
       target: ldm.data.imagenet.ImageNetSRTrain
