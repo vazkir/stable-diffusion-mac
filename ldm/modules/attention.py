@@ -215,7 +215,7 @@ class BasicTransformerBlock(nn.Module):
         x = self.ff(self.norm3(x)) + x
         return x
 
-
+# Encodes the conditional information into this U-NET block
 class SpatialTransformer(nn.Module):
     """
     Transformer block for image-like data.
@@ -247,16 +247,26 @@ class SpatialTransformer(nn.Module):
                                               kernel_size=1,
                                               stride=1,
                                               padding=0))
-
+        
+    # context -> conditioning information from the label (1, 1, 512)
+    # We do basic transformer logic now with a conditioning as well
     def forward(self, x, context=None):
         # note: if no context is given, cross-attention defaults to self-attention
         b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
         x = self.proj_in(x)
+        
+        # Re-arrange our representation to its suitable for transformers
+        # Basically flattening out the height and the width
         x = rearrange(x, 'b c h w -> b (h w) c')
+        
         for block in self.transformer_blocks:
+            
+            # Apply the cross attention with the transformer blocks with the condition
             x = block(x, context=context)
+            
+        # Re-arrange back to format we can use agin
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         x = self.proj_out(x)
         return x + x_in

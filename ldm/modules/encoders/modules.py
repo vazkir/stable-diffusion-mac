@@ -26,18 +26,21 @@ class AbstractEncoder(nn.Module):
         raise NotImplementedError
 
 
-
+# Embeds the 1000 classes from imagenet for the LDM
 class ClassEmbedder(nn.Module):
     def __init__(self, embed_dim, n_classes=1000, key='class'):
         super().__init__()
         self.key = key
         self.embedding = nn.Embedding(n_classes, embed_dim)
 
+    # Creates the embedding in the forward pass
     def forward(self, batch, key=None):
         if key is None:
             key = self.key
         # this is for use in crossattn
         c = batch[key][:, None]
+        
+        # We grab the key and we embed it -> (1, 1, 512)
         c = self.embedding(c)
         return c
 

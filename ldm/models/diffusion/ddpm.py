@@ -75,6 +75,8 @@ class DDPM(pl.LightningModule):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
         self.parameterization = parameterization
+        
+        # eps predition, is predictingt the noise instead of x0
         print(f"{self.__class__.__name__}: Running in {self.parameterization}-prediction mode")
         self.cond_stage_model = None
         self.clip_denoised = clip_denoised
@@ -83,6 +85,8 @@ class DDPM(pl.LightningModule):
         self.image_size = image_size  # try conv?
         self.channels = channels
         self.use_positional_encodings = use_positional_encodings
+        
+        # This wrapper is what starts making the U-NET
         self.model = DiffusionWrapper(unet_config, conditioning_key)
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
@@ -103,6 +107,7 @@ class DDPM(pl.LightningModule):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet)
 
+        # NOTE: Check out other vide from ai elephany with side by side comparisson how this works
         self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
@@ -113,7 +118,7 @@ class DDPM(pl.LightningModule):
         if self.learn_logvar:
             self.logvar = nn.Parameter(self.logvar, requires_grad=True)
 
-
+    # Nothing is learnable in this part
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
                           linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
         if exists(given_betas):
@@ -163,7 +168,9 @@ class DDPM(pl.LightningModule):
             lvlb_weights = 0.5 * np.sqrt(torch.Tensor(alphas_cumprod)) / (2. * 1 - torch.Tensor(alphas_cumprod))
         else:
             raise NotImplementedError("mu not supported")
+        
         # TODO how to choose this term
+        # Nothing is learnable here, and these are just the weights of the scheduler
         lvlb_weights[0] = lvlb_weights[1]
         self.register_buffer('lvlb_weights', lvlb_weights, persistent=False)
         assert not torch.isnan(self.lvlb_weights).all()
@@ -270,12 +277,16 @@ class DDPM(pl.LightningModule):
         channels = self.channels
         return self.p_sample_loop((batch_size, channels, image_size, image_size),
                                   return_intermediates=return_intermediates)
-
+        
+    # The closed form solution for adding noise from the pure latent untill some t
     def q_sample(self, x_start, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
+        
+        # sqrt_alphas_cumprod & sqrt_one_minus_alphas_cumprod are non learnable parameters from scheduler
         return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
+    # Just and MSE loss used to compare predicted noise with actual noise
     def get_loss(self, pred, target, mean=True):
         if self.loss_type == 'l1':
             loss = (target - pred).abs()
@@ -326,6 +337,7 @@ class DDPM(pl.LightningModule):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         return self.p_losses(x, t, *args, **kwargs)
 
+    # Just grab the image and reformat
     def get_input(self, batch, k):
         x = batch[k]
         if len(x.shape) == 3:
@@ -339,7 +351,10 @@ class DDPM(pl.LightningModule):
         loss, loss_dict = self(x)
         return loss, loss_dict
 
+    # Required by pytorch lighting to implement
     def training_step(self, batch, batch_idx):
+        
+        # batch['image'].shape -> (1, 256, 256, 3) same as AE training
         loss, loss_dict = self.shared_step(batch)
 
         self.log_dict(loss_dict, prog_bar=True,
@@ -420,7 +435,7 @@ class DDPM(pl.LightningModule):
         opt = torch.optim.AdamW(params, lr=lr)
         return opt
 
-
+# The Latent Diffusion U-Net like part of the model
 class LatentDiffusion(DDPM):
     """main class"""
     def __init__(self,
@@ -445,6 +460,9 @@ class LatentDiffusion(DDPM):
             conditioning_key = None
         ckpt_path = kwargs.pop("ckpt_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
+        
+        # We initialize the super Denoising Diffussion Probabilistic Model (DDPM)
+        # This is the model from the original diffusion paper
         super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
         self.concat_mode = concat_mode
         self.cond_stage_trainable = cond_stage_trainable
@@ -457,7 +475,13 @@ class LatentDiffusion(DDPM):
             self.scale_factor = scale_factor
         else:
             self.register_buffer('scale_factor', torch.tensor(scale_factor))
-        self.instantiate_first_stage(first_stage_config)
+            
+        # Now we are training the model in a hollistic fashoin, we have to instantiate 
+        # the first stage, which is the AutoEncodeKL but now as the VQ Model with frozen weighs
+        self.instantiate_first_stage(first_stage_config) # VQModel
+        
+        # Now we instantiate the conditional stage, which uses the class information 
+        # In the image from the network, this is the T_thetha which gets passed to denoising unet
         self.instantiate_cond_stage(cond_stage_config)
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
@@ -524,6 +548,8 @@ class LatentDiffusion(DDPM):
         else:
             assert config != '__is_first_stage__'
             assert config != '__is_unconditional__'
+            
+            # Here we instantiate the ClassEmbedder
             model = instantiate_from_config(config)
             self.cond_stage_model = model
 
@@ -542,10 +568,13 @@ class LatentDiffusion(DDPM):
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
             z = encoder_posterior.sample()
+        # Instead we just use the encode posterior instead of distributon
         elif isinstance(encoder_posterior, torch.Tensor):
             z = encoder_posterior
         else:
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
+        
+        # Scale factor is 1 in the first iteration checked
         return self.scale_factor * z
 
     def get_learned_conditioning(self, c):
@@ -554,7 +583,9 @@ class LatentDiffusion(DDPM):
                 c = self.cond_stage_model.encode(c)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
+            # c is still the conditional information
             else:
+                # We call the .forward function in the ClassEmbedder
                 c = self.cond_stage_model(c)
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
@@ -657,15 +688,24 @@ class LatentDiffusion(DDPM):
         if bs is not None:
             x = x[:bs]
         x = x.to(self.device)
+        
+        # We encode using the first stage, meaning we don't want to deal with images anymore for ldm
+        # Instead we now want to deal with the latent space -> (1, 4, 32, 32)
+        # It's not a gaussin distribution anymore like when training AE, because this works differently
         encoder_posterior = self.encode_first_stage(x)
+        
+        # Get the latent representation
         z = self.get_first_stage_encoding(encoder_posterior).detach()
 
+        # The conditioning key is the class label from the imagenet dataset
         if self.model.conditioning_key is not None:
             if cond_key is None:
                 cond_key = self.cond_stage_key
             if cond_key != self.first_stage_key:
                 if cond_key in ['caption', 'coordinates_bbox']:
                     xc = batch[cond_key]
+                
+                # We just pass the batch as it contains multiple keys where 1 of them is the label
                 elif cond_key == 'class_label':
                     xc = batch
                 else:
@@ -679,7 +719,7 @@ class LatentDiffusion(DDPM):
                 else:
                     c = self.get_learned_conditioning(xc.to(self.device))
             else:
-                c = xc
+                c = xc # The batch information
             if bs is not None:
                 c = c[:bs]
 
@@ -694,6 +734,8 @@ class LatentDiffusion(DDPM):
             if self.use_positional_encodings:
                 pos_x, pos_y = self.compute_latent_shifts(batch)
                 c = {'pos_x': pos_x, 'pos_y': pos_y}
+                
+        # z = latent information and c = the conditionaing information
         out = [z, c]
         if return_first_stage_outputs:
             xrec = self.decode_first_stage(z)
@@ -863,19 +905,26 @@ class LatentDiffusion(DDPM):
             return self.first_stage_model.encode(x)
 
     def shared_step(self, batch, **kwargs):
+        # Latent information and conditional information
         x, c = self.get_input(batch, self.first_stage_key)
-        loss = self(x, c)
+        loss = self(x, c) # Calls the forward method
         return loss
 
     def forward(self, x, c, *args, **kwargs):
+        
+        # Generate some time steps randomly 
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
+            
+            # The conditionals are learnable
             if self.cond_stage_trainable:
                 c = self.get_learned_conditioning(c)
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
+                
+        # x = latent repesentation, c = conditioning information, t = randomly sampled time step
         return self.p_losses(x, c, t, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
@@ -984,6 +1033,7 @@ class LatentDiffusion(DDPM):
             x_recon = fold(o) / normalization
 
         else:
+            # self.model -> DiffusionWrapper, which contains the U-net model
             x_recon = self.model(x_noisy, t, **cond)
 
         if isinstance(x_recon, tuple) and not return_ids:
@@ -1009,14 +1059,25 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
+    # This is where the latent space magic happens
     def p_losses(self, x_start, cond, t, noise=None):
+        
+        # We sample some random noise
         noise = default(noise, lambda: torch.randn_like(x_start))
+        
+        # q_sample -> Is going to do the diffusion process
+        # We start from our pure latent representation
+        # And add up t steps of noise, which is a closed form solution so single step
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        
+        # Now we let the model apply the diffusion process for our noise input, t and cond
+        # And have the model predict the noise that was added to an input latent 
         model_output = self.apply_model(x_noisy, t, cond)
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
 
+        # As we are predicting the noise added, we set the target to the noise we added before
         if self.parameterization == "x0":
             target = x_start
         elif self.parameterization == "eps":
@@ -1024,21 +1085,31 @@ class LatentDiffusion(DDPM):
         else:
             raise NotImplementedError()
 
+        # This is literally an MSE loss comparing predicted and actual noise added
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
+        # logvar is set to 0 in our case, so nothing will change from the loss_simple here
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        
         # loss = loss_simple / torch.exp(self.logvar) + self.logvar
         if self.learn_logvar:
             loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
             loss_dict.update({'logvar': self.logvar.data.mean()})
 
+        # We now do some weighting on the loss 
         loss = self.l_simple_weight * loss.mean()
 
+        # Note why we need the lower bound vlb loss because its going to be same computation
+        # as we had above, so basically the l2 loss 
         loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+        
+        # Only difference here is that we have a different weight for the vlb loss
         loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
         loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+        
+        # Because original_elbo_weight is 0, it will not have any effect on the final loss
         loss += (self.original_elbo_weight * loss_vlb)
         loss_dict.update({f'{prefix}/loss': loss})
 
@@ -1358,6 +1429,7 @@ class LatentDiffusion(DDPM):
                 return {key: log[key] for key in return_keys}
         return log
 
+    # We use a scheduled AdamW as optimizer in the latentdiffusion
     def configure_optimizers(self):
         lr = self.learning_rate
         params = list(self.model.parameters())
@@ -1395,7 +1467,11 @@ class LatentDiffusion(DDPM):
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):
         super().__init__()
+        
+        # Here we instantiate the U-NET from the config
         self.diffusion_model = instantiate_from_config(diff_model_config)
+        
+        # We use cross-attention for the conditional info intergration into the model
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
 
@@ -1405,8 +1481,13 @@ class DiffusionWrapper(pl.LightningModule):
         elif self.conditioning_key == 'concat':
             xc = torch.cat([x] + c_concat, dim=1)
             out = self.diffusion_model(xc, t)
+        
+        # Default mostly
         elif self.conditioning_key == 'crossattn':
             cc = torch.cat(c_crossattn, 1)
+            
+            # Pass the conditioning with corss attention cc and time step and latent repr (x)
+            # This will be handled in the forward pass of the U-NET model (openai.py)
             out = self.diffusion_model(x, t, context=cc)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
@@ -1418,6 +1499,8 @@ class DiffusionWrapper(pl.LightningModule):
         else:
             raise NotImplementedError()
 
+        # output latent representation has same shape as input -> (1, 4, 32, 32)
+        # Which is now the noise that the model predicted was put on top of an input latent
         return out
 
 

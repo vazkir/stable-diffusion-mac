@@ -10,7 +10,11 @@ from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 
 from ldm.util import instantiate_from_config
 
-
+# Relatively similar to AutoEncoderKL, only this is used when training LDM
+# Remember how it works:
+# 1) First pre-train the AE
+# 2) Then freeze the AE, so you can use the latent representation
+# 3) Then train the u-net and conditional model 
 class VQModel(pl.LightningModule):
     def __init__(self,
                  ddconfig,
@@ -33,12 +37,21 @@ class VQModel(pl.LightningModule):
         self.embed_dim = embed_dim
         self.n_embed = n_embed
         self.image_key = image_key
+        
+        # Encoder and decocer similar to the regular AutoEnocderKL used
         self.encoder = Encoder(**ddconfig)
         self.decoder = Decoder(**ddconfig)
+        
+        # Now we us an identity loss instead, because we are not training
+        # Meaning we just load the pre-trained weights and let info pass through
         self.loss = instantiate_from_config(lossconfig)
+        
+        # This won't be called during LDM training
         self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.25,
                                         remap=remap,
                                         sane_index_shape=sane_index_shape)
+        
+        # Same as regular one
         self.quant_conv = torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         if colorize_nlabels is not None:
@@ -55,6 +68,7 @@ class VQModel(pl.LightningModule):
             self.model_ema = LitEma(self)
             print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
+        # Now we initialize from the pre-trained checkpoints, so we can use this for this part of training
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
         self.scheduler_config = scheduler_config
@@ -268,6 +282,8 @@ class VQModelInterface(VQModel):
 
     def encode(self, x):
         h = self.encoder(x)
+        
+        # (1, 4, 32, 32) -> 4 the number of latent channels. 32 spatial dimensionality
         h = self.quant_conv(h)
         return h
 

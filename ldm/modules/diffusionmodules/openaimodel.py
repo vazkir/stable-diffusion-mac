@@ -77,12 +77,16 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
+    # Based on the type of layer, it will optionally pass embedding of conditional info
     def forward(self, x, emb, context=None):
         for layer in self:
+            # Pass in the embedding to timestep blocks
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
+            # The SpatialTransformer can take in the context so pass that
             elif isinstance(layer, SpatialTransformer):
                 x = layer(x, context)
+            # Any other, just pass the image input features
             else:
                 x = layer(x)
         return x
@@ -410,6 +414,7 @@ class QKVAttention(nn.Module):
         return count_flops_attn(model, _x, y)
 
 
+# The U-Net model introduced by openAI that is re-used for the latent diffusion part but on latents
 class UNetModel(nn.Module):
     """
     The full UNet model with attention and timestep embedding.
@@ -515,6 +520,8 @@ class UNetModel(nn.Module):
 
         self.input_blocks = nn.ModuleList(
             [
+                # Important -> Make sure we can later pass timestep info or conditional info
+                # Into several submodules. It applies a differebt operation for different blocks
                 TimestepEmbedSequential(
                     conv_nd(dims, in_channels, model_channels, 3, padding=1)
                 )
@@ -548,6 +555,7 @@ class UNetModel(nn.Module):
                         #num_heads = 1
                         dim_head = ch // num_heads if use_spatial_transformer else num_head_channels
                     layers.append(
+                        # SpatialTransformer encodes the conditional information into the U-NET
                         AttentionBlock(
                             ch,
                             use_checkpoint=use_checkpoint,
@@ -720,6 +728,8 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
         hs = []
+        
+        # We embed the time step information
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
@@ -728,9 +738,15 @@ class UNetModel(nn.Module):
             emb = emb + self.label_emb(y)
 
         h = x.type(self.dtype)
+        
+        # Now start going through the U-NET
         for module in self.input_blocks:
+            
+            # Each block we always pass the representation (h), temporal emb (emb) and cond info (context)
+            # This will trigger the TimestepEmbedSequential, which will pass emb or context based on layer
             h = module(h, emb, context)
             hs.append(h)
+            
         h = self.middle_block(h, emb, context)
         for module in self.output_blocks:
             h = th.cat([h, hs.pop()], dim=1)
