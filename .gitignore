@@ -19,3 +19,6 @@ src
 # egg file create from setup.py 
 latent_diffusion.egg-info
 taming
+
+# Where the downloaded weights are stored
+models/*/**
